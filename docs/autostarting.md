@@ -125,7 +125,7 @@ A sample is provided at: `security_monkey_scheduler.conf`(https://github.com/Net
 Run the following commands to set this up:
 ```
     sudo touch /var/run/sm-celerybeat-schedule
-    sudo chgrp www-data sm-celerybeat-schedule
+    sudo chown www-data:www-data /var/run/sm-celerybeat-schedule
     sudo chgrp -R www-data /var/log/security_monkey
     sudo cp /usr/local/src/security_monkey/supervisor/security_monkey_scheduler.conf /etc/supervisor/conf.d/security_monkey_scheduler.conf
     sudo systemctl enable supervisor
