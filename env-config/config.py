@@ -62,8 +62,6 @@ AWS_GOVCLOUD = False
 
 SQLALCHEMY_DATABASE_URI = 'postgresql://securitymonkeyuser:securitymonkeypassword@localhost:5432/secmonkey'
 
-SQLALCHEMY_POOL_SIZE = 50
-SQLALCHEMY_MAX_OVERFLOW = 15
 ENVIRONMENT = 'ec2'
 USE_ROUTE53 = False
 FQDN = 'ec2-XX-XXX-XXX-XXX.compute-1.amazonaws.com'
@@ -89,6 +87,9 @@ SECURITY_POST_REGISTER_VIEW = BASE_URL
 SECURITY_POST_CONFIRM_VIEW = BASE_URL
 SECURITY_POST_RESET_VIEW = BASE_URL
 SECURITY_POST_CHANGE_VIEW = BASE_URL
+
+# Log SSL Cert SubjectAltName errors
+LOG_SSL_SUBJ_ALT_NAME_ERRORS = True
 
 # This address gets all change notifications (i.e. 'securityteam@example.com')
 SECURITY_TEAM_EMAIL = []
@@ -117,11 +118,6 @@ SECURITYGROUP_INSTANCE_DETAIL = 'FULL'
 # DEFAULT_SENSITIVE = ['cloudhsm', 'cloudtrail', 'acm', 'config', 'kms', 'lambda', 'organizations', 'rds', 'route53', 'shield']
 # Otherwise, SM will alert on all dataplane write access.
 DEFAULT_SENSITIVE = 'ALL'
-
-# Threads used by the scheduler.
-# You will likely need at least one core thread for every account being monitored.
-CORE_THREADS = 25
-MAX_THREADS = 30
 
 # SSO SETTINGS:
 ACTIVE_PROVIDERS = []  # "aad", "ping", "google" or "onelogin"
@@ -154,6 +150,7 @@ ONELOGIN_APP_ID = '<APP_ID>'  # OneLogin App ID provider by your administrator
 ONELOGIN_EMAIL_FIELD = 'User.email'  # SAML attribute used to provide email address
 ONELOGIN_DEFAULT_ROLE = 'View'  # Default RBAC when user doesn't already exist
 ONELOGIN_HTTPS = True  # If using HTTPS strict mode will check the requests are HTTPS
+ONELOGIN_LOG_SAML_RESPONSE = False # Log SAML response for debugging. Default is False
 ONELOGIN_SETTINGS = {
     # If strict is True, then the Python Toolkit will reject unsigned
     # or unencrypted messages if it expects them to be signed or encrypted.

@@ -20,13 +20,11 @@
 .. version:: $$VERSION$$
 .. moduleauthor:: Bridgewater OSS <opensource@bwater.com>
 
-
 """
-from datastore import Account, AccountType, AccountTypeCustomValues, User
+from .datastore import Account, AccountType, AccountTypeCustomValues, User
 from security_monkey import app, db
 from security_monkey.common.utils import find_modules
 import psycopg2
-import time
 import traceback
 
 from security_monkey.exceptions import AccountNameExists
@@ -73,11 +71,21 @@ class AccountManager(object):
     def sanitize_account_identifier(self, identifier):
         """Each account type can determine how to sanitize the account identifier.
         By default, will strip any whitespace.
-        
+
         Returns:
             identifier stripped of whitespace
         """
         return identifier.strip()
+
+    def sanitize_account_name(self, name):
+        """Each account type can determine how to sanitize the account name.
+        By default, will strip trailing whitespace.
+        Account alias (name) can have spaces and special characters
+
+        Returns:
+            name stripped of ending whitespace
+        """
+        return name.rstrip()
 
     def sync(self, account_type, name, active, third_party, notes, identifier, custom_fields):
         """
@@ -91,7 +99,7 @@ class AccountManager(object):
         if not account:
             account = Account()
 
-        account = self._populate_account(account, account_type_result.id, name,
+        account = self._populate_account(account, account_type_result.id, self.sanitize_account_name(name),
                                          active, third_party, notes,
                                          self.sanitize_account_identifier(identifier),
                                          custom_fields)
@@ -124,7 +132,7 @@ class AccountManager(object):
                     app.logger.error("Account with name: {} already exists.".format(name))
                     raise AccountNameExists(name)
 
-                account.name = name
+                account.name = self.sanitize_account_name(name)
 
         else:
             account = Account.query.filter(Account.name == name).first()
@@ -163,7 +171,7 @@ class AccountManager(object):
             return None
 
         account = Account()
-        account = self._populate_account(account, account_type_result.id, name,
+        account = self._populate_account(account, account_type_result.id, self.sanitize_account_name(name),
                                          active, third_party, notes,
                                          self.sanitize_account_identifier(identifier),
                                          custom_fields)
@@ -196,7 +204,7 @@ class AccountManager(object):
         Creates account DB object to be stored in the DB by create or update.
         May be overridden to store additional data
         """
-        account.name = name
+        account.name = self.sanitize_account_name(name)
         account.identifier = self.sanitize_account_identifier(identifier)
         account.notes = notes
         account.active = active
@@ -207,25 +215,40 @@ class AccountManager(object):
 
         return account
 
-    def _update_custom_fields(self, account, custom_fields):
+    def _update_custom_fields(self, account, provided_custom_fields):
+        existing_values = {}
+
         if account.custom_fields is None:
             account.custom_fields = []
 
+        for cf in account.custom_fields:
+            existing_values[cf.name] = cf
+
         for custom_config in self.custom_field_configs:
             if custom_config.db_item:
-                field_name = custom_config.name
-                for current_field in account.custom_fields:
-                    if current_field.name == field_name:
-                        # don't zero out any fields we don't actually have a value for
-                        if custom_fields.get(field_name):
-                            if current_field.value != custom_fields.get(field_name):
-                                current_field.value = custom_fields.get(field_name)
-                                db.session.add(current_field)
-                            break
-                else:
-                    new_value = AccountTypeCustomValues(
-                        name=field_name, value=custom_fields.get(field_name))
-                    account.custom_fields.append(new_value)
+                # The default value for a field that is not present and without any value set is `None`.
+                new_value = None
+
+                try:
+                    # Is this field passed in? If not...
+                    if not provided_custom_fields.get(custom_config.name):
+                        # Does this field already exist for the account?
+                        # If it doesn't, then this will create a new empty field. Otherwise, do nothing.
+                        _ = existing_values[custom_config.name]
+
+                    else:
+                        # Need to check if this field is new for the account -- or updating an existing value.
+                        new_value = provided_custom_fields[custom_config.name]
+                        if existing_values[custom_config.name].value != new_value:
+                            # There is a change, so update:
+                            existing_values[custom_config.name].value = new_value
+                            db.session.add(existing_values[custom_config.name])
+
+                except KeyError:
+                    # The field does not exist, so add it with the correct value:
+                    new_custom_value = AccountTypeCustomValues(name=custom_config.name, value=new_value)
+                    account.custom_fields.append(new_custom_value)
+                    db.session.add(account)
 
     def is_compatible_with_account_type(self, account_type):
         if self.account_type == account_type or account_type in self.compatable_account_types:
@@ -345,5 +368,32 @@ def delete_account_by_name(name):
     account_id = account.id
     db.session.expunge(account)
     delete_account_by_id(account_id)
+
+
+def bulk_disable_accounts(account_names):
+    """Bulk disable accounts"""
+    for account_name in account_names:
+        account = Account.query.filter(Account.name == account_name).first()
+        if account:
+            app.logger.debug("Disabling account %s", account.name)
+            account.active = False
+            db.session.add(account)
+
+    db.session.commit()
+    db.session.close()
+
+
+def bulk_enable_accounts(account_names):
+    """Bulk enable accounts"""
+    for account_name in account_names:
+        account = Account.query.filter(Account.name == account_name).first()
+        if account:
+            app.logger.debug("Enabling account %s", account.name)
+            account.active = True
+            db.session.add(account)
+
+    db.session.commit()
+    db.session.close()
+
 
 find_modules('account_managers')

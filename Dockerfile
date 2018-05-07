@@ -1,5 +1,4 @@
-
-# Copyright 2014 Netflix, Inc.
+# Copyright 2018 Netflix, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,36 +12,36 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM ubuntu:14.04
+FROM ubuntu:xenial
 MAINTAINER Netflix Open Source Development <talent@netflix.com>
 
-ENV SECURITY_MONKEY_VERSION=v0.9.3 \
+ENV SECURITY_MONKEY_VERSION=v1.0 \
     SECURITY_MONKEY_SETTINGS=/usr/local/src/security_monkey/env-config/config-docker.py
 
-RUN apt-get update &&\
-  apt-get -y -q install python-software-properties software-properties-common postgresql-9.3 postgresql-client-9.3 postgresql-contrib-9.3 curl &&\
-  apt-get install -y python-pip python-dev python-psycopg2 libffi-dev libpq-dev libyaml-dev libxml2-dev libxmlsec1-dev git sudo swig &&\
-  rm -rf /var/lib/apt/lists/*
-
-RUN pip install setuptools --upgrade
-RUN pip install pip --upgrade
-RUN pip install "urllib3[secure]" --upgrade
-RUN pip install google-compute-engine
-RUN pip install cloudaux\[gcp\]
-
-RUN cd /usr/local/src &&\
-#   git clone --branch $SECURITY_MONKEY_VERSION https://github.com/Netflix/security_monkey.git
-  /bin/mkdir -p security_monkey
-ADD . /usr/local/src/security_monkey
-
-RUN cd /usr/local/src/security_monkey &&\
-  python setup.py install &&\
-  /bin/mkdir -p /var/log/security_monkey/
-
-RUN chmod +x /usr/local/src/security_monkey/docker/*.sh &&\
-  mkdir -pv /var/log/security_monkey &&\
-  /usr/bin/touch /var/log/security_monkey/securitymonkey.log
-  # ln -s /dev/stdout /var/log/security_monkey/securitymonkey.log
-
+SHELL ["/bin/bash", "-c"]
 WORKDIR /usr/local/src/security_monkey
+COPY requirements.txt /usr/local/src/security_monkey/
+
+RUN echo "UTC" > /etc/timezone
+
+RUN apt-get update && \
+    apt-get upgrade -y && \
+    DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y build-essential python-pip python-dev && \
+    DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y wget postgresql postgresql-contrib libpq-dev libffi-dev libxml2-dev libxmlsec1-dev && \
+    apt-get clean -y && \
+    pip install setuptools --upgrade && \
+    pip install pip --upgrade && \
+    hash -d pip && \
+    pip install "urllib3[secure]" --upgrade && \
+    pip install google-compute-engine && \
+    pip install cloudaux\[gcp\] && \
+    pip install cloudaux\[openstack\] && \
+    pip install python-saml && \
+    pip install -r requirements.txt
+    
+COPY . /usr/local/src/security_monkey
+RUN pip install ."[onelogin]" && \
+    /bin/mkdir -p /var/log/security_monkey/ && \
+    /usr/bin/touch /var/log/security_monkey/securitymonkey.log
+
 EXPOSE 5000

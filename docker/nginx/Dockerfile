@@ -1,4 +1,4 @@
-# Copyright 2014 Netflix, Inc.
+# Copyright 2018 Netflix, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,12 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM nginx:1.11.4
+FROM nginx:stable
 MAINTAINER Netflix Open Source Development <talent@netflix.com>
 
-ENV SECURITY_MONKEY_VERSION=v0.9.3
+ENV SECURITY_MONKEY_VERSION=v1.1.1
 RUN apt-get update &&\
-  apt-get install -y curl git sudo apt-transport-https &&\
+  apt-get install -y curl git sudo apt-transport-https gnupg &&\
   curl https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - &&\
   curl https://storage.googleapis.com/download.dartlang.org/linux/debian/dart_stable.list > /etc/apt/sources.list.d/dart_stable.list && \
   apt-get update &&\
@@ -26,23 +26,26 @@ RUN apt-get update &&\
 
 RUN cd /usr/local/src &&\
   mkdir -p security_monkey
-ADD . /usr/local/src/security_monkey
+
+COPY dart /usr/local/src/security_monkey/dart
 
 RUN cd /usr/local/src/security_monkey/dart &&\
-  /usr/lib/dart/bin/pub get &&\
-  /usr/lib/dart/bin/pub build &&\
-  /bin/mkdir -p /usr/local/src/security_monkey/security_monkey/static/ &&\
-  /bin/cp -R /usr/local/src/security_monkey/dart/build/web/* /usr/local/src/security_monkey/security_monkey/static/
+  /usr/lib/dart/bin/pub get && \
+  /usr/lib/dart/bin/pub build && \
+  /bin/mkdir -p /usr/local/src/security_monkey/security_monkey/static/ && \
+  /bin/cp -R /usr/local/src/security_monkey/dart/build/web/* /usr/local/src/security_monkey/security_monkey/static/ && \
+  rm -r /usr/local/src/security_monkey/dart/build
 
 RUN /bin/rm /etc/nginx/conf.d/default.conf &&\
   /bin/mkdir -p /var/log/security_monkey/ /etc/nginx/ssl/ &&\
-  ln -s /dev/stdout /var/log/security_monkey/security_monkey.access.log &&\
-  ln -s /dev/stderr /var/log/security_monkey/security_monkey.error.log
+  chmod -R guo+r /usr/local/src/security_monkey &&\
+  find /usr/local/src/security_monkey -type d -exec chmod 755 {} \;
 
 WORKDIR /etc/nginx
 EXPOSE 443
 
-ADD docker/nginx/conf.d/securitymonkey.conf /etc/nginx/conf.d/securitymonkey.conf
+COPY docker/nginx/conf.d/securitymonkey.conf /etc/nginx/conf.d/securitymonkey.conf
 COPY docker/nginx/nginx.conf /etc/nginx/nginx.conf
+COPY docker /usr/local/src/security_monkey/docker
 
 ENTRYPOINT ["/usr/local/src/security_monkey/docker/nginx/start-nginx.sh"]

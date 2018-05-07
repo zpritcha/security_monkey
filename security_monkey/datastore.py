@@ -24,7 +24,7 @@ from flask_security.core import UserMixin, RoleMixin
 from flask_security.signals import user_registered
 from sqlalchemy import BigInteger
 
-from auth.models import RBACUserMixin
+from .auth.models import RBACUserMixin
 
 from security_monkey import db, app
 
@@ -51,8 +51,8 @@ import traceback
 
 association_table = db.Table(
     'association',
-    Column('user_id', Integer, ForeignKey('user.id')),
-    Column('account_id', Integer, ForeignKey('account.id'))
+    Column('user_id', Integer, ForeignKey('user.id'), primary_key=True),
+    Column('account_id', Integer, ForeignKey('account.id'), primary_key=True)
 )
 
 
@@ -74,7 +74,7 @@ class Account(db.Model):
     id = Column(Integer, primary_key=True)
     active = Column(Boolean())
     third_party = Column(Boolean())
-    name = Column(String(32), index=True, unique=True)
+    name = Column(String(50), index=True, unique=True)
     notes = Column(String(256))
     identifier = Column(String(256), unique=True)  # Unique id of the account, the number for AWS.
     items = relationship("Item", backref="account", cascade="all, delete, delete-orphan")
@@ -83,6 +83,8 @@ class Account(db.Model):
     custom_fields = relationship("AccountTypeCustomValues", lazy="immediate", cascade="all, delete, delete-orphan")
     unique_const = UniqueConstraint('account_type_id', 'identifier')
 
+    # 'lazy' is required for the Celery scheduler to reference the type:
+    type = relationship("AccountType", backref="account_type", lazy="immediate")
     exceptions = relationship("ExceptionLogs", backref="account", cascade="all, delete, delete-orphan")
 
     def getCustom(self, name):
@@ -120,8 +122,8 @@ class Technology(db.Model):
 
 roles_users = db.Table(
     'roles_users',
-    db.Column('user_id', db.Integer(), db.ForeignKey('user.id')),
-    db.Column('role_id', db.Integer(), db.ForeignKey('role.id'))
+    db.Column('user_id', db.Integer(), db.ForeignKey('user.id'), primary_key=True),
+    db.Column('role_id', db.Integer(), db.ForeignKey('role.id'), primary_key=True)
 )
 
 
@@ -167,10 +169,12 @@ class User(UserMixin, db.Model, RBACUserMixin):
     def __str__(self):
         return '<User id=%s email=%s>' % (self.id, self.email)
 
+
 issue_item_association = db.Table('issue_item_association',
-    Column('super_issue_id', Integer, ForeignKey('itemaudit.id')),
-    Column('sub_item_id', Integer, ForeignKey('item.id'))
+    Column('super_issue_id', Integer, ForeignKey('itemaudit.id'), primary_key=True),
+    Column('sub_item_id', Integer, ForeignKey('item.id'), primary_key=True)
 )
+
 
 class ItemAudit(db.Model):
     """
@@ -493,36 +497,6 @@ class Datastore(object):
     def __init__(self, debug=False):
         pass
 
-    def ephemeral_paths_for_tech(self, tech=None):
-        """
-        Returns the ephemeral paths for each technology.
-        Note: this data is also in the watcher for each technology.
-        It is mirrored here simply to assist in the security_monkey rearchitecture.
-        :param tech: str, name of technology
-        :return: list of ephemeral paths
-        """
-        ephemeral_paths = {
-            'redshift': [
-                "RestoreStatus",
-                "ClusterStatus",
-                "ClusterParameterGroups$ParameterApplyStatus",
-                "ClusterParameterGroups$ClusterParameterStatusList$ParameterApplyErrorDescription",
-                "ClusterParameterGroups$ClusterParameterStatusList$ParameterApplyStatus",
-                "ClusterRevisionNumber"
-            ],
-            'securitygroup': ["assigned_to"],
-            'iamuser': [
-                "user$password_last_used",
-                "accesskeys$*$LastUsedDate",
-                "accesskeys$*$Region",
-                "accesskeys$*$ServiceName"
-            ],
-            's3': [
-                "GrantReferences"
-            ]
-        }
-        return ephemeral_paths.get(tech, [])
-
     def durable_hash(self, item, ephemeral_paths):
         """
         Remove all ephemeral paths from the item and return the hash of the new structure.
@@ -610,10 +584,12 @@ class Datastore(object):
         item = self._get_item(ctype, region, account, name)
         return item.issues
 
-    def store(self, ctype, region, account, name, active_flag, config, arn=None, new_issues=[], ephemeral=False):
+    def store(self, ctype, region, account, name, active_flag, config, arn=None, new_issues=None, ephemeral=False,
+              source_watcher=None):
         """
         Saves an itemrevision.  Create the item if it does not already exist.
         """
+        new_issues = new_issues if new_issues else []
         item = self._get_item(ctype, region, account, name)
 
         if arn:
@@ -633,9 +609,13 @@ class Datastore(object):
             item.arn = arn
 
         item.latest_revision_complete_hash = self.hash_config(config)
+        if source_watcher and source_watcher.honor_ephemerals:
+            ephemeral_paths = source_watcher.ephemeral_paths
+        else:
+            ephemeral_paths = []
         item.latest_revision_durable_hash = self.durable_hash(
             config,
-            self.ephemeral_paths_for_tech(tech=ctype))
+            ephemeral_paths)
 
         if ephemeral:
             item_revision = item.revisions.first()
@@ -672,6 +652,25 @@ class Datastore(object):
         db.session.commit()
         #db.session.close()
 
+    def _delete_duplicate_item(self, items):
+        """
+        Given a list of identical items (account, name, region, technology), delete the duplicate, and return
+        the most current item back out.
+        :param items:
+        :return:
+        """
+        last_item = items.pop()
+
+        for i in items:
+            if last_item.latest_revision_id > i.latest_revision_id:
+                db.session.delete(i)
+            else:
+                db.session.delete(last_item)
+                last_item = i
+
+        db.session.commit()
+        return last_item
+
     def _get_item(self, technology, region, account, name):
         """
         Returns the first item with matching parameters.
@@ -690,10 +689,12 @@ class Datastore(object):
             .all()
 
         if len(item) > 1:
-            # DB needs to be cleaned up and a bug needs to be found if this ever happens.
-            raise Exception("Found multiple items for tech: {} region: {} account: {} and name: {}"
-                            .format(technology, region, account, name))
-        if len(item) == 1:
+            app.logger.error("[?] Duplicate items have been detected: {a}/{t}/{r}/{n}. Removing duplicate...".format(
+                a=account, t=technology, r=region, n=name))
+            item = self._delete_duplicate_item(item)
+            app.logger.info("[-] Duplicate items removed: {a}/{t}/{r}/{n}...".format(a=account, t=technology,
+                                                                                     r=region, n=name))
+        elif len(item) == 1:
             item = item[0]
         else:
             item = None
